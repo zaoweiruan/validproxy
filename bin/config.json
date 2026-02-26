@@ -1,0 +1,9 @@
+{
+  "database": {
+    "path": "E:/soft/v2rayN-windows-64/guiConfigs/guiNDB1.db"
+  },
+  "sql_statements": [
+    "DELETE FROM profileitem WHERE StreamSecurity = '' AND Subid <> '5544178410297751350';",
+    "DELETE FROM ProfileItem WHERE rowid NOT IN (SELECT MIN(rowid) FROM ProfileItem GROUP BY address, port, Network);"
+  ]
+}
