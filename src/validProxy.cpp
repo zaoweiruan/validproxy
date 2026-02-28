@@ -75,8 +75,26 @@ struct TestResult {
     std::string network;
     std::string security;
     std::string indexId;
-    long latency;      // -1 表示失败
-    std::string jsonConfig; // 可选：保存生成的 JSON 配置字符串
+    long latency;          // -1 表示失败
+    std::string jsonConfig;
+
+    // 新增
+    int curlCode = 0;
+    long httpCode = 0;
+    std::string errorMessage;
+    std::string diagnosis;
+};
+
+struct CurlTestDetail {
+    long latency = -1;
+    CURLcode curlCode = CURLE_OK;
+    long httpCode = 0;
+    std::string errorMessage;
+    std::string diagnosis;
+    double dns_ms;
+    double tcp_ms;
+    double tls_ms;
+    double total_ms;
 };
 
 class ResultWriter
@@ -101,24 +119,28 @@ public:
             throw std::runtime_error("Prepare 写入语句失败");
     }
 
-    void insert(const std::string& indexId,
-                long latency,
+    void insert(const TestResult& detail,
                 int sortOrder)
     {
         sqlite3_reset(stmt);
 
         sqlite3_bind_text(stmt, 1,
-                          indexId.c_str(),
+        		detail.indexId.c_str(),
                           -1, SQLITE_TRANSIENT);
 
-        sqlite3_bind_int(stmt, 2, latency);
+        sqlite3_bind_int(stmt, 2, detail.latency);
 
         sqlite3_bind_double(stmt, 3, 0.0); // Speed 暂时为 0
 
         sqlite3_bind_int(stmt, 4, sortOrder);
 
-        std::string msg =
-            (latency > 0) ? "OK" : "Connection Failed";
+
+        std::string msg;
+
+        if (detail.latency > 0)
+            msg = "OK";
+        else
+            msg = detail.diagnosis;
 
         sqlite3_bind_text(stmt, 5,
                           msg.c_str(),
@@ -465,9 +487,9 @@ json::object buildOutboundSettings(const ProxyItem& p)
     return settings;
 }
 
-std::string generateConfig(const ProxyItem& p)
+std::string generateConfig(const ProxyItem& p,json::object &config)
 {
-    json::object config;
+   // json::object config;
 
     config["log"] = {
         {"loglevel", "warning"}
@@ -504,6 +526,8 @@ std::string generateConfig(const ProxyItem& p)
     std::ofstream file("temp_config.json");
     file << json::serialize(config);
     file.close();
+
+    //jsonConfig=json::serialize(config);
     std::cout << json::serialize(config) << std::endl;
     return "temp_config.json";
 }
@@ -780,12 +804,46 @@ PROCESS_INFORMATION startXray(const std::string& config)
     std::this_thread::sleep_for(std::chrono::seconds(2));
     return pi;
 }
-
-long testLatency()
+std::string diagnoseCurl(CURLcode code)
 {
+    switch (code)
+    {
+    case CURLE_COULDNT_RESOLVE_HOST:
+        return "DNS 解析失败";
+
+    case CURLE_COULDNT_CONNECT:
+        return "TCP 连接失败（端口未开放或被拦截）";
+
+    case CURLE_OPERATION_TIMEDOUT:
+        return "连接超时（可能被墙或丢包）";
+
+    case CURLE_SSL_CONNECT_ERROR:
+        return "TLS 握手失败";
+
+    case CURLE_PEER_FAILED_VERIFICATION:
+        return "证书校验失败";
+
+    case CURLE_GOT_NOTHING:
+        return "服务器未返回数据";
+
+    default:
+        return "未知连接错误";
+    }
+}
+
+
+CurlTestDetail testLatency()
+{
+    CurlTestDetail detail;
+
     CURL* curl = curl_easy_init();
     if (!curl)
-        return -1;
+    {
+        detail.diagnosis = "CURL 初始化失败";
+        return detail;
+    }
+
+    char errbuf[CURL_ERROR_SIZE] = {0};
 
     curl_easy_setopt(curl, CURLOPT_URL,
                      "https://www.gstatic.com/generate_204");
@@ -795,39 +853,60 @@ long testLatency()
 
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 8L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
+
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
                      +[](char*, size_t s, size_t n, void*) {
                          return s * n;
                      });
 
-    CURLcode res = curl_easy_perform(curl);
+//    auto start = std::chrono::steady_clock::now();
 
-//    if (res != CURLE_OK)
-//    {
-//        curl_easy_cleanup(curl);
-//        return -1;
-//    }
-    long httpCode = 0;
+    detail.curlCode = curl_easy_perform(curl);
+
+    if (detail.curlCode != CURLE_OK)
+    {
+        detail.errorMessage = curl_easy_strerror(detail.curlCode);
+        if (strlen(errbuf) > 0)
+            detail.errorMessage += std::string(" | ") + errbuf;
+
+        detail.diagnosis = diagnoseCurl(detail.curlCode);
+        curl_easy_cleanup(curl);
+        return detail;
+    }
+
     curl_easy_getinfo(curl,
                       CURLINFO_RESPONSE_CODE,
-                      &httpCode);
+                      &detail.httpCode);
 
-    if (httpCode != 204)
-        return -1;
-//    double totalTime = 0.0;
-//    curl_easy_getinfo(curl,
-//                      CURLINFO_TOTAL_TIME,
-//                      &totalTime);
-    double startTransfer = 0;
-    curl_easy_getinfo(curl,
-                      CURLINFO_STARTTRANSFER_TIME,
-                      &startTransfer);
+    if (detail.httpCode != 204)
+    {
+        detail.diagnosis = "HTTP 状态异常: " + std::to_string(detail.httpCode);
+        curl_easy_cleanup(curl);
+        return detail;
+    }
+
+//    auto end = std::chrono::steady_clock::now();
+//    detail.latency =
+//        std::chrono::duration_cast<std::chrono::milliseconds>(
+//            end - start).count();
+
+    double dns = 0, tcp = 0, tls = 0, total = 0;
+
+    curl_easy_getinfo(curl, CURLINFO_NAMELOOKUP_TIME, &dns);
+    curl_easy_getinfo(curl, CURLINFO_CONNECT_TIME, &tcp);
+    curl_easy_getinfo(curl, CURLINFO_APPCONNECT_TIME, &tls);
+    curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME, &total);
+
+    detail.dns_ms  = dns  * 100;
+    detail.tcp_ms  = tcp  * 100;
+    detail.tls_ms  = tls  * 100;
+    detail.latency = total * 100;
+
     curl_easy_cleanup(curl);
-
-    // 秒转毫秒
-//    return static_cast<long>(totalTime * 1000);
-    return static_cast<long>(startTransfer * 100);
+    return detail;
 }
+
 
 int main()
 {
@@ -851,7 +930,7 @@ int main()
 
     ResultWriter writer(cfg.dbPath);
     int sortOrder = 1;
-
+    json::object jsonConfig;
     for (auto& p : proxies)
     {
          TestResult result;
@@ -863,11 +942,17 @@ int main()
         std::cout << "测试: " << p.lineNo<<"\t"<<p.remarks<<"\t"<<p.address <<"\t"<<result.protocol << std::endl;
 
 			try {
-				auto config = generateConfig(p);
+				auto config = generateConfig(p,jsonConfig);
 
 				auto pi = startXray(config);
 
-				long latency = testLatency();
+				auto detail = testLatency();
+
+				result.latency = detail.latency;
+				result.curlCode = detail.curlCode;
+				result.httpCode = detail.httpCode;
+				result.errorMessage = detail.errorMessage;
+				result.diagnosis = detail.diagnosis;
 
 				result.remarks = p.remarks;
 				result.address = p.address;
@@ -876,16 +961,29 @@ int main()
 				result.security = p.streamSecurity;
 
 				result.indexId = p.indexId;
-				result.latency = latency > 0 ? latency : -1;
-				result.jsonConfig = json::serialize(config);
-				writer.insert(p.indexId, latency, sortOrder++);
+				//result.latency = latency > 0 ? latency : -1;
+				result.jsonConfig = json::serialize(jsonConfig);
+
+				writer.insert(result, sortOrder++);
 
 				results.push_back(result);
 
-				if (latency > 0)
-					std::cout << "成功 " << latency << " ms\n";
+
+				if (detail.latency > 0)
+				{
+					std::cout << " 成功 " <<"dns= "<<detail.dns_ms<<" ms, tcp= "<<detail.tcp_ms<<" ms, tls= "<<detail.tls_ms<<" ms latency="<< detail.latency << " ms\n";
+				}
 				else
-					std::cout << "失败\n";
+				{
+				    std::cout << "失败\n";
+				    std::cout << "错误: " << detail.errorMessage << "\n";
+				    std::cout << "诊断: " << detail.diagnosis << "\n";
+				}
+
+//				if (latency > 0)
+//					std::cout << "成功 " << latency << " ms\n";
+//				else
+//					std::cout << "失败\n";
 
 				TerminateProcess(pi.hProcess, 0);
 				CloseHandle(pi.hProcess);
