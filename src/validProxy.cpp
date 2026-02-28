@@ -17,29 +17,50 @@
 namespace json = boost::json;
 
 struct ProxyItem {
-    int configType;
+    int configType;   // 3=SS, 4=VMess, 5=VLESS, 6=Trojan
     std::string address;
     int port;
-    std::string id;
-    std::string security;
+
+    std::string id;       // uuid 或 password
+    std::string security; // method / cipher
+    std::string flow;     // 新增 (VLESS Vision)
+
     std::string network;
     std::string streamSecurity;
-    std::string remarks;
 
+    std::string remarks;
+    std::string indexId;
+
+    // 通用
     std::string requestHost;
     std::string path;
     std::string allowInsecure;
     std::string sni;
     std::string alpn;
+
+    // TLS/Reality
     std::string fingerprint;
     std::string publicKey;
     std::string shortId;
     std::string spiderX;
-    std::string indexId;
-    int lineNo;
-    int muxEnabled;
-};
 
+    // TCP header
+    std::string tcpHeaderType; // none/http
+
+    // gRPC
+    int grpcMultiMode = 0;
+
+    // KCP
+    int kcpMtu = 1350;
+    int kcpTti = 20;
+    int kcpUplink = 5;
+    int kcpDownlink = 20;
+    int kcpCongestion = 0;
+    std::string kcpHeaderType = "none";
+
+    int muxEnabled;
+    int lineNo;
+};
 struct AppConfig {
     std::string dbPath;
     std::string proxy_query;
@@ -55,6 +76,7 @@ struct TestResult {
     std::string security;
     std::string indexId;
     long latency;      // -1 表示失败
+    std::string jsonConfig; // 可选：保存生成的 JSON 配置字符串
 };
 
 class ResultWriter
@@ -131,22 +153,21 @@ bool isValidNetwork(const std::string& network)
 
 json::object buildStream(const ProxyItem& p)
 {
-    if (!isValidNetwork(p.network))
-        throw std::runtime_error("非法 network: " + p.network);
-
     json::object stream;
+
+    // ========= NETWORK =========
     stream["network"] = p.network;
 
-    /* security */
+    // ========= SECURITY =========
+
     if (p.streamSecurity == "tls")
     {
         stream["security"] = "tls";
 
-        json::object tls;
-        tls["serverName"] =
-            p.sni.empty() ? p.address : p.sni;
-        tls["allowInsecure"] =
-            (p.allowInsecure == "true");
+        json::object tls{
+            {"serverName", p.sni.empty() ? p.address : p.sni},
+            {"allowInsecure", p.allowInsecure == "true"}
+        };
 
         if (!p.alpn.empty())
             tls["alpn"] = json::array({ p.alpn });
@@ -155,34 +176,66 @@ json::object buildStream(const ProxyItem& p)
     }
     else if (p.streamSecurity == "reality")
     {
+        // 仅允许 VLESS / Trojan
+        if (p.configType != 5 && p.configType != 6)
+            throw std::runtime_error("Reality 仅支持 VLESS 或 Trojan");
+
         stream["security"] = "reality";
 
-        json::object reality;
-        reality["serverName"] = p.sni;
-        reality["publicKey"] = p.publicKey;
-        reality["shortId"] = p.shortId;
-        reality["fingerprint"] = p.fingerprint;
-        reality["spiderX"] = p.spiderX;
+        json::object reality{
+            {"serverName", p.sni},
+            {"publicKey", p.publicKey},
+            {"shortId", p.shortId},
+            {"fingerprint", p.fingerprint}
+        };
+
+        // spiderX 必须存在时才写
+        if (!p.spiderX.empty())
+            reality["spiderX"] = p.spiderX;
+
+        // Reality 推荐显式写 show=false（可选但建议）
+        reality["show"] = false;
 
         stream["realitySettings"] = reality;
+
+        // 🚫 删除 flow 自动注入
+        // Trojan 不需要 flow
+        // VLESS 如需要 flow 应在 outbound 层写，而不是 stream 层
     }
     else
     {
         stream["security"] = "none";
     }
 
-    /* network specific */
+    // ========= TRANSPORT =========
 
-    if (p.network == "ws")
+    if (p.network == "tcp")
     {
-        json::object ws;
-        ws["path"] = p.path.empty() ? "/" : p.path;
+        if (p.tcpHeaderType == "http")
+        {
+            stream["tcpSettings"] = {
+                {"header", {
+                    {"type", "http"},
+                    {"request", {
+                        {"path", json::array({ p.path.empty() ? "/" : p.path })},
+                        {"headers", {
+                            {"Host", json::array({ p.requestHost })}
+                        }}
+                    }}
+                }}
+            };
+        }
+    }
+    else if (p.network == "ws")
+    {
+    	json::object ws;
+    	ws["path"] = p.path.empty() ? "/" : p.path;
 
         if (!p.requestHost.empty())
         {
-            ws["headers"] = {
-                {"Host", p.requestHost}
-            };
+            json::object headers;
+            headers["Host"] = p.requestHost;
+            ws["headers"] = headers;
         }
 
         stream["wsSettings"] = ws;
@@ -190,8 +243,11 @@ json::object buildStream(const ProxyItem& p)
     else if (p.network == "grpc")
     {
         json::object grpc;
-        grpc["serviceName"] =
-            p.path.empty() ? "grpc" : p.path;
+
+        // ✅ 如果链接没有 serviceName，必须生成空字符串
+        grpc["serviceName"] = p.path;   // 不要默认填 "grpc"
+
+        grpc["multiMode"] = (p.grpcMultiMode == 1);
 
         stream["grpcSettings"] = grpc;
     }
@@ -200,31 +256,138 @@ json::object buildStream(const ProxyItem& p)
         if (p.streamSecurity != "tls")
             throw std::runtime_error("h2 必须 TLS");
 
-        json::object http;
-        http["path"] =
-            p.path.empty() ? "/" : p.path;
-
-        stream["httpSettings"] = http;
-    }
-    else if (p.network == "httpupgrade")
-    {
-        json::object http;
-        http["path"] =
-            p.path.empty() ? "/" : p.path;
-
-        stream["httpSettings"] = http;
+        stream["httpSettings"] = {
+            {"path", p.path.empty() ? "/" : p.path},
+            {"host", json::array({ p.requestHost })}
+        };
     }
     else if (p.network == "kcp")
     {
-        stream["kcpSettings"] = json::object{};
+        stream["kcpSettings"] = {
+            {"mtu", p.kcpMtu},
+            {"tti", p.kcpTti},
+            {"uplinkCapacity", p.kcpUplink},
+            {"downlinkCapacity", p.kcpDownlink},
+            {"congestion", p.kcpCongestion == 1},
+            {"header", { {"type", p.kcpHeaderType} }}
+        };
     }
-    else if (p.network == "xhttp")
-    {
-        json::object xhttp;
-        xhttp["path"] =
-            p.path.empty() ? "/" : p.path;
 
-        stream["xhttpSettings"] = xhttp;
+    return stream;
+}
+
+json::object buildStream1(const ProxyItem& p)
+{
+    json::object stream;
+    stream["network"] = p.network;
+
+    /* ========== SECURITY ========== */
+
+
+    if (p.streamSecurity == "tls")
+    {
+        stream["security"] = "tls";
+
+        json::object tls{
+            {"serverName", p.sni.empty() ? p.address : p.sni},
+            {"allowInsecure", p.allowInsecure == "true"}
+        };
+
+        if (!p.alpn.empty())
+            tls["alpn"] = json::array({ p.alpn });
+
+        stream["tlsSettings"] = tls;
+    }
+    else if (p.streamSecurity == "reality")
+    {
+        if (p.configType != 5 && p.configType != 6 )
+        {
+        	throw std::runtime_error("Reality 仅支持 VLESS 或 Trojan");
+        }
+
+        stream["network"] = p.network;
+
+        if (p.flow.empty())
+        	stream["flow"] = "xtls-rprx-vision";
+
+        stream["security"] = "reality";
+
+        json::object reality{
+            {"serverName", p.sni},
+            {"publicKey", p.publicKey},
+            {"shortId", p.shortId},
+            {"fingerprint", p.fingerprint}
+        };
+
+        if (!p.spiderX.empty())
+            reality["spiderX"] = p.spiderX;
+
+        stream["realitySettings"] = reality;
+    }
+    else
+    {
+        stream["security"] = "none";
+    }
+
+    /* ========== NETWORK ========== */
+
+    if (p.network == "tcp")
+    {
+        if (p.tcpHeaderType == "http")
+        {
+            stream["tcpSettings"] = {
+                {"header", {
+                    {"type", "http"},
+                    {"request", {
+                        {"path", json::array({ p.path.empty() ? "/" : p.path })},
+                        {"headers", {
+                            {"Host", json::array({ p.requestHost })}
+                        }}
+                    }}
+                }}
+            };
+        }
+    }
+    else if (p.network == "ws")
+    {
+        json::object ws{
+            {"path", p.path.empty() ? "/" : p.path}
+        };
+
+        if (!p.requestHost.empty())
+            ws["headers"] = { {"Host", p.requestHost} };
+
+        stream["wsSettings"] = ws;
+    }
+    else if (p.network == "grpc")
+    {
+        json::object grpc{
+            {"serviceName", p.path.empty() ? "grpc" : p.path},
+            {"multiMode", p.grpcMultiMode == 1}
+        };
+
+        stream["grpcSettings"] = grpc;
+    }
+    else if (p.network == "h2")
+    {
+        if (p.streamSecurity != "tls")
+            throw std::runtime_error("h2 必须 TLS");
+
+        stream["httpSettings"] = {
+            {"path", p.path.empty() ? "/" : p.path},
+            {"host", json::array({ p.requestHost })}
+        };
+    }
+    else if (p.network == "kcp")
+    {
+        stream["kcpSettings"] = {
+            {"mtu", p.kcpMtu},
+            {"tti", p.kcpTti},
+            {"uplinkCapacity", p.kcpUplink},
+            {"downlinkCapacity", p.kcpDownlink},
+            {"congestion", p.kcpCongestion == 1},
+            {"header", { {"type", p.kcpHeaderType} }}
+        };
     }
 
     return stream;
@@ -236,7 +399,23 @@ json::object buildOutboundSettings(const ProxyItem& p)
 
     switch (p.configType)
     {
-    case 3: // shadowsocks
+    case 1: // VMess
+        settings["vnext"] = json::array({
+            {
+                {"address", p.address},
+                {"port", p.port},
+                {"users", json::array({
+                    {
+                        {"id", p.id},
+                        {"alterId", 0},
+                        {"security", p.security.empty() ? "auto" : p.security}
+                    }
+                })}
+            }
+        });
+        break;
+
+    case 3: // Shadowsocks
         settings["servers"] = json::array({
             {
                 {"address", p.address},
@@ -247,22 +426,29 @@ json::object buildOutboundSettings(const ProxyItem& p)
         });
         break;
 
-    case 5: // vless
+
+
+    case 5: // VLESS
+    {
+        json::object user{
+            {"id", p.id},
+            {"encryption", "none"}
+        };
+
+        if (!p.flow.empty())
+            user["flow"] = p.flow;
+
         settings["vnext"] = json::array({
             {
                 {"address", p.address},
                 {"port", p.port},
-                {"users", json::array({
-                    {
-                        {"id", p.id},
-                        {"encryption", "none"}
-                    }
-                })}
+                {"users", json::array({ user })}
             }
         });
         break;
+    }
 
-    case 6: // trojan
+    case 6: // Trojan
         settings["servers"] = json::array({
             {
                 {"address", p.address},
@@ -273,7 +459,7 @@ json::object buildOutboundSettings(const ProxyItem& p)
         break;
 
     default:
-        throw std::runtime_error("未知 configType");
+        throw std::runtime_error("不支持协议类型");
     }
 
     return settings;
@@ -283,41 +469,42 @@ std::string generateConfig(const ProxyItem& p)
 {
     json::object config;
 
-    /* inbound */
+    config["log"] = {
+        {"loglevel", "warning"}
+    };
+
     config["inbounds"] = json::array({
         {
             {"listen","127.0.0.1"},
             {"port",1080},
             {"protocol","socks"},
-            {"settings", {{"udp",false}}}
+            {"settings", {{"udp",true}}}
         }
     });
 
-    /* outbound */
     json::object outbound;
 
     if (p.configType == 3) outbound["protocol"] = "shadowsocks";
+    else if (p.configType == 1) outbound["protocol"] = "vmess";
     else if (p.configType == 5) outbound["protocol"] = "vless";
     else if (p.configType == 6) outbound["protocol"] = "trojan";
-    else throw std::runtime_error("不支持协议类型");
 
     outbound["settings"] = buildOutboundSettings(p);
     outbound["streamSettings"] = buildStream(p);
 
     if (p.muxEnabled)
-    {
-        outbound["mux"] = {
-            {"enabled",true},
-            {"concurrency",8}
-        };
-    }
+        outbound["mux"] = { {"enabled",true}, {"concurrency",8} };
 
     config["outbounds"] = json::array({ outbound });
+
+    config["routing"] = {
+        {"domainStrategy", "IPIfNonMatch"}
+    };
 
     std::ofstream file("temp_config.json");
     file << json::serialize(config);
     file.close();
-
+    std::cout << json::serialize(config) << std::endl;
     return "temp_config.json";
 }
 
@@ -335,7 +522,8 @@ void saveResultsCSV(const std::vector<TestResult>& results,
              << r.port << ","
              << r.protocol << ","
              << r.network << ","
-             << r.security << ",";
+             << r.security << ","
+			 <<r.jsonConfig<<",";
 
         if (r.latency > 0)
             file << r.latency << ",OK\n";
@@ -364,6 +552,7 @@ void saveResultsJSON(const std::vector<TestResult>& results,
         obj["security"] = r.security;
         obj["latency"] = r.latency;
         obj["status"] = r.latency > 0 ? "OK" : "FAILED";
+        obj["jsonConfig"] = r.jsonConfig;
 
         arr.push_back(obj);
     }
@@ -469,6 +658,7 @@ std::vector<ProxyItem> loadProxiesFromConfig(const AppConfig& cfg)
             p.muxEnabled = sqlite3_column_int(stmt, 17);
             p.indexId = getText(18);
             p.lineNo=sqlite3_column_int(stmt, 19);
+            p.flow = getText(20);
             list.push_back(std::move(p));
         }
 
@@ -664,48 +854,57 @@ int main()
 
     for (auto& p : proxies)
     {
-        std::cout << "测试: " << p.lineNo<<"\t"<<p.remarks << std::endl;
-
-        auto config = generateConfig(p);
-        auto pi = startXray(config);
-
-        long latency = testLatency();
-
-        TestResult result;
-        result.remarks = p.remarks;
-        result.address = p.address;
-        result.port = p.port;
-        result.network = p.network;
-        result.security = p.streamSecurity;
-
+         TestResult result;
         if (p.configType == 3) result.protocol = "Shadowsocks";
         if (p.configType == 5) result.protocol = "VLESS";
         if (p.configType == 6) result.protocol = "Trojan";
+        if (p.configType == 1) result.protocol = "VMESS";
 
+        std::cout << "测试: " << p.lineNo<<"\t"<<p.remarks<<"\t"<<p.address <<"\t"<<result.protocol << std::endl;
 
-        result.indexId = p.indexId;
-        result.latency = latency > 0 ? latency : -1;
-        writer.insert(p.indexId,
-                      latency,
-                      sortOrder++);
+			try {
+				auto config = generateConfig(p);
 
-        results.push_back(result);
+				auto pi = startXray(config);
 
-        if (latency > 0)
-            std::cout << "成功 " << latency << " ms\n";
-        else
-            std::cout << "失败\n";
+				long latency = testLatency();
 
-        TerminateProcess(pi.hProcess, 0);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
+				result.remarks = p.remarks;
+				result.address = p.address;
+				result.port = p.port;
+				result.network = p.network;
+				result.security = p.streamSecurity;
 
-        std::cout << "----------------------\n";
+				result.indexId = p.indexId;
+				result.latency = latency > 0 ? latency : -1;
+				result.jsonConfig = json::serialize(config);
+				writer.insert(p.indexId, latency, sortOrder++);
+
+				results.push_back(result);
+
+				if (latency > 0)
+					std::cout << "成功 " << latency << " ms\n";
+				else
+					std::cout << "失败\n";
+
+				TerminateProcess(pi.hProcess, 0);
+				CloseHandle(pi.hProcess);
+				CloseHandle(pi.hThread);
+
+				std::cout << "----------------------\n";
+			}
+			catch (const std::exception &e) {
+				std::cerr << "配置错误: " << e.what() << "\n";
+				result.latency = -1;
+				results.push_back(result);
+				continue;
+			}
+
     }
 
     /* 保存结果 */
     //writeResultsToDB(cfg.dbPath, results);
-    saveResultsCSV(results, "test_result.csv");
+//    saveResultsCSV(results, "test_result.csv");
     saveResultsJSON(results, "test_result.json");
     // 后续测速逻辑...
 }
