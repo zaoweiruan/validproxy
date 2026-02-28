@@ -2,8 +2,11 @@
   "database": {
     "path": "E:/soft/v2rayN-windows-64/guiConfigs/guiNDB1.db"
   },
-  "sql_statements": [
+  "proxy_query": "select * from (SELECT ConfigType, Address, Port, Id, Security, Network, StreamSecurity, Remarks, RequestHost, Path, AllowInsecure, Sni, Alpn, Fingerprint, PublicKey, ShortId, SpiderX, MuxEnabled, IndexId, ROW_NUMBER() OVER (ORDER BY IndexId) AS linenum FROM ProfileItem WHERE ConfigType IN (3, 5, 6) ORDER BY IndexId ) a where a.linenum BETWEEN 401 AND 500;",
+  "proxy_query1": "select * from (SELECT ConfigType, Address, Port, Id, Security, Network, StreamSecurity, Remarks, RequestHost, Path, AllowInsecure, Sni, Alpn, Fingerprint, PublicKey, ShortId, SpiderX, MuxEnabled, IndexId, ROW_NUMBER() OVER (ORDER BY IndexId) AS linenum FROM ProfileItem WHERE address= '185.234.57.216' and ConfigType IN (3, 5, 6) ORDER BY IndexId ) a where a.linenum BETWEEN 0 AND 1;",
+  "clear_statements": [
     "DELETE FROM profileitem WHERE StreamSecurity = '' AND Subid <> '5544178410297751350';",
-    "DELETE FROM ProfileItem WHERE rowid NOT IN (SELECT MIN(rowid) FROM ProfileItem GROUP BY address, port, Network);"
-  ]
+    "DELETE FROM ProfileItem WHERE rowid NOT IN (SELECT MIN(rowid) FROM ProfileItem GROUP BY address, port, Network);",
+    "DELETE FROM ProfileExItem WHERE IndexId NOT IN (SELECT IndexId FROM ProfileItem);"
+  ]  
 }

@@ -15,9 +15,42 @@
 // Boost.JSON (需要 Boost 1.75 或更高版本)
 #include <boost/json.hpp>
 namespace json = boost::json;
-
-int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
+bool get_table_count(sqlite3* db, const std::string& table_name, long long& out_count)
 {
+    out_count = 0;
+
+    std::string sql = "SELECT COUNT(*) FROM " + table_name + ";";
+
+    sqlite3_stmt* stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr);
+
+    if (rc != SQLITE_OK) {
+        std::cerr << "prepare 失敗: " << sqlite3_errmsg(db) << std::endl;
+        return false;
+    }
+
+    rc = sqlite3_step(stmt);
+
+    if (rc == SQLITE_ROW) {
+        out_count = sqlite3_column_int64(stmt, 0);
+        std::cout << "表 " << table_name << " 總行數: " << out_count << std::endl;
+    }
+    else if (rc == SQLITE_DONE) {
+        std::cout << "表 " << table_name << " 沒有資料" << std::endl;
+    }
+    else {
+        std::cerr << "step 失敗: " << sqlite3_errmsg(db) << std::endl;
+    }
+
+    sqlite3_finalize(stmt);
+    return (rc == SQLITE_ROW || rc == SQLITE_DONE);
+}
+int main()
+{
+//	AllocConsole();
+//    FILE* fp;
+//    freopen_s(&fp, "CONOUT$", "w", stdout);
+//    freopen_s(&fp, "CONOUT$", "w", stderr);
     std::string config_path = "config.json";
 
     // 1. 读取配置文件
@@ -67,7 +100,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     if (jv.is_object()) {
         json::object const& root = jv.as_object();
 
-        if (auto it = root.find("sql_statements"); it != root.end()) {
+        if (auto it = root.find("clear_statements"); it != root.end()) {
             json::value const& arr_val = it->value();
             if (arr_val.is_array()) {
                 json::array const& arr = arr_val.as_array();
@@ -99,6 +132,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     }
 
     std::cout << "数据库打开成功\n\n";
+    long long count = 0;
+    get_table_count(db, "Profileitem", count);
 
     // 5. 逐条执行 SQL
     for (size_t i = 0; i < statements.size(); ++i) {
@@ -106,6 +141,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
         std::cout << "执行语句 " << (i + 1) << ":\n" << sql << "\n";
 
         char* errMsg = nullptr;
+        sqlite3_stmt* stmt;
         rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &errMsg);
 
         if (rc != SQLITE_OK) {
@@ -113,14 +149,19 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
             if (errMsg) sqlite3_free(errMsg);
             // 可选择在此 break; 或 continue; 目前選擇繼續執行
         } else {
+
+
             sqlite3_int64 changes = sqlite3_changes(db);
             std::cout << "成功，受影响行数: " << changes << "\n";
+
         }
         std::cout << "----------------------------------------\n";
     }
 
+
+    get_table_count(db, "Profileitem", count);
     sqlite3_close(db);
     std::cout << "\n所有清理操作完成。\n";
-
+    system("pause");   // ← 加這一行
     return 0;
 }
