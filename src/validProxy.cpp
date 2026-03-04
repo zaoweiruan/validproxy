@@ -925,7 +925,7 @@ int main()
 
         std::cout << "获取代理数量: " << proxies.size() << "\n";
         std::cout << "--------------------------------\n";
-
+        int proxiesCounts=proxies.size();
     std::vector<TestResult> results;
 
     ResultWriter writer(cfg.dbPath);
@@ -939,7 +939,7 @@ int main()
         if (p.configType == 6) result.protocol = "Trojan";
         if (p.configType == 1) result.protocol = "VMESS";
 
-        std::cout << "测试: " << p.lineNo<<"\t"<<p.remarks<<"\t"<<p.address <<"\t"<<result.protocol << std::endl;
+        std::cout << "测试: " << p.lineNo<<"/"<<proxiesCounts<<"\t"<<p.remarks<<"\t"<<p.address <<"\t"<<result.protocol << std::endl;
 
 			try {
 				auto config = generateConfig(p,jsonConfig);
