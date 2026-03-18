@@ -1,15 +1,17 @@
 {
-  "database": {
-    "path": "E:/soft/v2rayN-windows-64/guiConfigs/guiNDB.db"
-  },
-  "proxy_query": "select * from (SELECT *, ROW_NUMBER() OVER (ORDER BY IndexId) AS linenum FROM ProfileItem WHERE IndexId in (SELECT IndexId FROM ProfileExItem where Delay>-2) and ConfigType IN (1, 3, 5, 6) and  Subid = '5544178410297751350'  ORDER BY IndexId ) a where a.linenum BETWEEN 0 AND 200;",
-  "proxy_query1": "select * from (SELECT *, ROW_NUMBER() OVER (ORDER BY IndexId) AS linenum FROM ProfileItem WHERE address= '51.91.11.29' and ConfigType IN (1, 3, 5, 6) ORDER BY IndexId ) a where a.linenum BETWEEN 0 AND 100;",
-    "proxy_query2": "SELECT ConfigType, Address, Port, Id, Security, Network, StreamSecurity, Remarks, RequestHost, Path, AllowInsecure, Sni, Alpn, Fingerprint, PublicKey, ShortId, SpiderX, MuxEnabled, IndexId, ROW_NUMBER() OVER (ORDER BY IndexId) AS linenum FROM ProfileItem WHERE IndexId in (SELECT IndexId FROM ProfileExItem where Delay<1) and  Subid = '5544178410297751350' ORDER BY IndexId ",
-    "proxy_query3": "SELECT ConfigType, Address, Port, Id, Security, Network, StreamSecurity, Remarks, RequestHost, Path, AllowInsecure, Sni, Alpn, Fingerprint, PublicKey, ShortId, SpiderX, MuxEnabled, IndexId, ROW_NUMBER() OVER (ORDER BY IndexId) AS linenum FROM ProfileItem WHERE IndexId in (SELECT IndexId FROM ProfileExItem where Delay=0)  ORDER BY IndexId ",
+    "database": {
+        "path": "E:/v2rayN-windows-64/guiConfigs/guiNDB.db"
+    },
+    "proxy_query11": "select * from (SELECT IndexId, ConfigType, ConfigVersion, Address, Port, Id, AlterId, Security, Network, Remarks, HeaderType, RequestHost, Path, StreamSecurity, AllowInsecure, Subid, IsSub, Flow, Sni, Alpn, CoreType, PreSocksPort, Fingerprint, DisplayLog, PublicKey, ShortId, SpiderX, Extra, Ports, Mldsa65Verify, MuxEnabled, Cert, ROW_NUMBER() OVER (ORDER BY IndexId) AS linenum FROM ProfileItem WHERE ConfigType IN (1, 3, 5, 6) and  IndexId in (SELECT IndexId FROM ProfileExItem where message='') and ConfigType IN (1, 3, 5, 6) and  Subid not in  ('5544178410297751350','5126987642659995691')    ORDER BY IndexId ) a where a.linenum BETWEEN 0 AND 3000;",
+    "proxy_query1": "SELECT a.IndexId, a.ConfigType, a.ConfigVersion, a.Address, a.Port, a.Id, a.AlterId, a.Security, a.Network, a.Remarks, a.HeaderType, a.RequestHost, a.Path, a.StreamSecurity, a.AllowInsecure, a.Subid, a.IsSub, a.Flow, a.Sni, a.Alpn, a.CoreType, a.PreSocksPort, a.Fingerprint, a.DisplayLog, a.PublicKey, a.ShortId, a.SpiderX, a.Extra, a.Ports, a.Mldsa65Verify, a.MuxEnabled, a.Cert FROM ProfileItem a left join  ProfileExItem b on a.indexid=b.indexid WHERE a.ConfigType IN (1, 3, 5, 6) and b.message='';",
+    "proxy_query3": "select * from (SELECT IndexId, ConfigType, ConfigVersion, Address, Port, Id, AlterId, Security, Network, Remarks, HeaderType, RequestHost, Path, StreamSecurity, AllowInsecure, Subid, IsSub, Flow, Sni, Alpn, CoreType, PreSocksPort, Fingerprint, DisplayLog, PublicKey, ShortId, SpiderX, Extra, Ports, Mldsa65Verify, MuxEnabled, Cert, ROW_NUMBER() OVER (ORDER BY IndexId) AS linenum FROM ProfileItem WHERE address= 'stock.hostmonit.com' and ConfigType IN (1, 3, 5, 6) ORDER BY IndexId ) a where a.linenum BETWEEN 0 AND 100;",
+    "proxy_query2": "SELECT IndexId, ConfigType, ConfigVersion, Address, Port, Id, AlterId, Security, Network, Remarks, HeaderType, RequestHost, Path, StreamSecurity, AllowInsecure, Subid, IsSub, Flow, Sni, Alpn, CoreType, PreSocksPort, Fingerprint, DisplayLog, PublicKey, ShortId, SpiderX, Extra, Ports, Mldsa65Verify, MuxEnabled, Cert, ROW_NUMBER() OVER (ORDER BY IndexId) AS linenum  FROM ProfileItem where Subid <> '5544178410297751350' ORDER BY IndexId ",
+    "proxy_query": "SELECT IndexId, ConfigType, ConfigVersion, Address, Port, Id, AlterId, Security, Network, Remarks, HeaderType, RequestHost, Path, StreamSecurity, AllowInsecure, Subid, IsSub, Flow, Sni, Alpn, CoreType, PreSocksPort, Fingerprint, DisplayLog, PublicKey, ShortId, SpiderX, Extra, Ports, Mldsa65Verify, MuxEnabled, Cert, ROW_NUMBER() OVER (ORDER BY IndexId) AS linenum FROM ProfileItem WHERE IndexId in (SELECT IndexId FROM ProfileExItem) and Subid = '5126987642659995691' ORDER BY IndexId ",
     "proxy_query4": "select * from (SELECT ConfigType, Address, Port, Id, Security, Network, StreamSecurity, Remarks, RequestHost, Path, AllowInsecure, Sni, Alpn, Fingerprint, PublicKey, ShortId, SpiderX, MuxEnabled, IndexId, ROW_NUMBER() OVER (ORDER BY IndexId) AS linenum FROM ProfileItem WHERE Subid <> '5544178410297751350' and  ConfigType IN (1, 3, 5, 6) ORDER BY IndexId) a where a.linenum BETWEEN 0 AND 200;",
-  "clear_statements": [
-    "DELETE FROM profileitem WHERE StreamSecurity = '' AND Subid <> '5544178410297751350';",
-    "DELETE FROM ProfileItem WHERE rowid NOT IN (SELECT MIN(rowid) FROM ProfileItem GROUP BY address, port, Network);",
-    "DELETE FROM ProfileExItem WHERE IndexId NOT IN (SELECT IndexId FROM ProfileItem);"
-  ]  
+    "clear_statements": [
+        "DELETE FROM profileitem WHERE StreamSecurity = '' AND Subid not in  ('5544178410297751350','5126987642659995691');",
+        "DELETE FROM ProfileItem WHERE Subid  not in  ('5544178410297751350','5126987642659995691') and rowid NOT IN (SELECT MIN(rowid) FROM ProfileItem GROUP BY address, port, Network);",
+        "DELETE FROM ProfileItem WHERE StreamSecurity ='reality' and (PublicKey ='' or sni='');",
+        "DELETE FROM ProfileExItem WHERE indexid not in (select indexid from ProfileItem);"
+    ]
 }
